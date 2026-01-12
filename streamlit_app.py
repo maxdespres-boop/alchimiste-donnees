@@ -5,7 +5,6 @@ import io
 st.set_page_config(page_title="Alchimiste - Convertisseur", layout="wide")
 
 # --- MAPPING OFFICIEL : ITEMCODE -> NOM DE SKU (ORDRE FIXE) ---
-# Ce dictionnaire assure que même avec des noms identiques, le Code fait foi.
 SKU_MAPPING = {
     "MABLON4": "** 4 PACK ** BLONDE",
     "MAECOS4": "** 4 PACK ** ECOSSAISE",
@@ -35,8 +34,8 @@ SKU_MAPPING = {
     "MAPARA12": "**CAISSE DE 12** PARASOL",
     "MAPLUM12": "**CAISSE DE 12** PLUME",
     "MATROP12": "**CAISSE DE 12** PROJET TROPIC",
-    "MASABLO12": "**CAISSE DE 12** SANS ALCOOL B",  # BLONDE
-    "MASABLA12": "**CAISSE DE 12** SANS ALCOOL B ", # BLANCHE (Espace ajouté pour différencier au besoin)
+    "MASABLO12": "**CAISSE DE 12** SANS ALCOOL B",
+    "MASABLA12": "**CAISSE DE 12** SANS ALCOOL B ",
     "MASAECO12": "**CAISSE DE 12** SANS ALCOOL E",
     "MASAGOS12": "**CAISSE DE 12** SANS ALCOOL G",
     "MASAIPA12": "**CAISSE DE 12** SANS ALCOOL I",
@@ -53,12 +52,12 @@ SKU_MAPPING = {
 
 SKU_ORDER = list(SKU_MAPPING.values())
 
-st.title("🍺 Alchimiste : Traitement des Ventes")
+st.title("🍺 Alchimiste : Traitement Pro")
+
 uploaded_file = st.file_uploader("Glissez le fichier CSV ici", type="csv")
 
 if uploaded_file:
     try:
-        # Lecture avec encodage pour les accents
         df = pd.read_csv(uploaded_file, encoding='latin1')
         
         # Nettoyage numérique
@@ -66,7 +65,7 @@ if uploaded_file:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
 
-        # Mapping des noms propres via ItemCode
+        # Mapping des noms propres
         df['Nom_Propre'] = df['ItemCode'].map(SKU_MAPPING).fillna(df['ItemName'])
 
         def force_order(data_df):
@@ -74,32 +73,35 @@ if uploaded_file:
             merged = pd.merge(base, data_df, on='Nom_Propre', how='left').fillna(0)
             return merged.rename(columns={'Nom_Propre': 'ItemName'})
 
-        # --- CALCULS DES ONGLETS ---
-        res_sku = df.groupby('Nom_Propre')['LineQty'].sum().reset_index()
-        res_sku = force_order(res_sku)
+        # Préparation des DataFrames
+        data_sheets = {
+            'SKU_Caisses': force_order(df.groupby('Nom_Propre')['LineQty'].sum().reset_index()),
+            'SKU_Par_Jour': force_order(df.pivot_table(index='Nom_Propre', columns='DocDate', values='LineQty', aggfunc='sum', fill_value=0).reset_index()),
+            'Banniere_Caisses': df.groupby('GroupName')['LineQty'].sum().sort_values(ascending=False).reset_index(),
+            'Region_Caisses': df.groupby('CityS')['LineQty'].sum().sort_values(ascending=False).reset_index(),
+            'Rep_Caisses': df.groupby('RefPartenaire')['LineQty'].sum().sort_values(ascending=False).reset_index(),
+            'SKU_Financier': force_order(df.groupby('Nom_Propre').agg({'LineTotal': 'sum', 'Rabais': 'sum'}).reset_index())
+        }
 
-        res_jour = df.pivot_table(index='Nom_Propre', columns='DocDate', values='LineQty', aggfunc='sum', fill_value=0).reset_index()
-        res_jour = force_order(res_jour)
-
-        res_banniere = df.groupby('GroupName')['LineQty'].sum().sort_values(ascending=False).reset_index()
-        res_region = df.groupby('CityS')['LineQty'].sum().sort_values(ascending=False).reset_index()
-        res_rep = df.groupby('RefPartenaire')['LineQty'].sum().sort_values(ascending=False).reset_index()
-
-        res_fin = df.groupby('Nom_Propre').agg({'LineTotal': 'sum', 'Rabais': 'sum'}).reset_index()
-        res_fin = force_order(res_fin)
-
-        # Création du fichier Excel
+        # Export avec mise en page
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            res_sku.to_excel(writer, sheet_name='SKU_Caisses', index=False)
-            res_jour.to_excel(writer, sheet_name='SKU_Par_Jour', index=False)
-            res_banniere.to_excel(writer, sheet_name='Banniere_Caisses', index=False)
-            res_region.to_excel(writer, sheet_name='Region_Caisses', index=False)
-            res_rep.to_excel(writer, sheet_name='Rep_Caisses', index=False)
-            res_fin.to_excel(writer, sheet_name='SKU_Financier', index=False)
+            for sheet_name, data in data_sheets.items():
+                data.to_excel(writer, sheet_name=sheet_name, index=False)
+                
+                # Accès à l'objet xlsxwriter pour le formatage
+                worksheet = writer.sheets[sheet_name]
+                workbook = writer.book
+                header_format = workbook.add_format({'bold': True, 'bg_color': '#D7E4BC', 'border': 1})
+                
+                # Ajustement automatique de la largeur des colonnes
+                for i, col in enumerate(data.columns):
+                    column_len = max(data[col].astype(str).str.len().max(), len(col)) + 2
+                    worksheet.set_column(i, i, column_len)
+                    worksheet.write(0, i, col, header_format)
 
-        st.success("✅ Fichier prêt !")
-        st.download_button("📥 Télécharger Excel", output.getvalue(), "Ventes_Hebdo_Alchimiste.xlsx")
+        st.success("✅ Fichier prêt avec mise en page !")
+        st.download_button("📥 Télécharger Excel Formaté", output.getvalue(), "Ventes_Alchimiste_Pro.xlsx")
 
     except Exception as e:
         st.error(f"Une erreur est survenue : {e}")
