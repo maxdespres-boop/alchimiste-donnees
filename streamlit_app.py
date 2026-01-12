@@ -29,50 +29,65 @@ SKU_MASTER_LIST = [
 ]
 
 st.title("🍺 Alchimiste : Traitement de Ventes")
+st.info("Uploadez votre fichier CSV extrait pour générer le rapport Excel.")
+
 uploaded_file = st.file_uploader("Glissez le fichier CSV ici", type="csv")
 
 if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    
-    # Nettoyage
-    df['LineQty'] = pd.to_numeric(df['LineQty'], errors='coerce').fillna(0)
-    df['LineTotal'] = pd.to_numeric(df['LineTotal'], errors='coerce').fillna(0)
-    df['Rabais'] = pd.to_numeric(df['Rabais'], errors='coerce').fillna(0)
+    try:
+        # CORRECTION : On essaie 'latin1' ou 'cp1252' qui sont les formats Excel/Windows standards au Québec
+        df = pd.read_csv(uploaded_file, encoding='latin1')
+        
+        # Nettoyage des colonnes numériques (remplace les virgules par des points si nécessaire)
+        for col in ['LineQty', 'LineTotal', 'Rabais']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
 
-    # Fonction pour forcer l'ordre et inclure les zéros
-    def force_sku_order(data_df, value_cols):
-        # Créer un DataFrame vide avec tous les SKUs
-        base = pd.DataFrame({'ItemName': SKU_MASTER_LIST})
-        # Fusionner avec les données réelles
-        merged = pd.merge(base, data_df, on='ItemName', how='left').fillna(0)
-        return merged
+        # Fonction pour forcer l'ordre et inclure les zéros
+        def force_sku_order(data_df, value_cols):
+            base = pd.DataFrame({'ItemName': SKU_MASTER_LIST})
+            merged = pd.merge(base, data_df, on='ItemName', how='left').fillna(0)
+            return merged
 
-    # 1. Ventes par SKU (Caisses)
-    res_sku = df.groupby('ItemName')['LineQty'].sum().reset_index()
-    res_sku = force_sku_order(res_sku, 'LineQty')
+        # 1. Ventes par SKU (Caisses)
+        res_sku = df.groupby('ItemName')['LineQty'].sum().reset_index()
+        res_sku = force_sku_order(res_sku, 'LineQty')
 
-    # 2. Ventes par SKU par Jour
-    res_jour = df.pivot_table(index='ItemName', columns='DocDate', values='LineQty', aggfunc='sum', fill_value=0).reset_index()
-    res_jour = force_sku_order(res_jour, []) # Les colonnes de dates seront ajoutées par le merge
+        # 2. Ventes par SKU par Jour
+        res_jour = df.pivot_table(index='ItemName', columns='DocDate', values='LineQty', aggfunc='sum', fill_value=0).reset_index()
+        res_jour = force_sku_order(res_jour, [])
 
-    # 6. Ventes SKU Financier
-    res_fin = df.groupby('ItemName').agg({'LineTotal': 'sum', 'Rabais': 'sum'}).reset_index()
-    res_fin = force_sku_order(res_fin, ['LineTotal', 'Rabais'])
+        # 3. Ventes par Bannière
+        res_banniere = df.groupby('GroupName')['LineQty'].sum().reset_index()
+        
+        # 4. Ventes par Région
+        res_region = df.groupby('CityS')['LineQty'].sum().reset_index()
+        
+        # 5. Ventes par Représentant
+        res_rep = df.groupby('RefPartenaire')['LineQty'].sum().reset_index()
 
-    # Autres (Bannière, Région, Rep) - Pas d'ordre fixe demandé ici
-    res_banniere = df.groupby('GroupName')['LineQty'].sum().reset_index()
-    res_region = df.groupby('CityS')['LineQty'].sum().reset_index()
-    res_rep = df.groupby('RefPartenaire')['LineQty'].sum().reset_index()
+        # 6. Ventes SKU Financier
+        res_fin = df.groupby('ItemName').agg({'LineTotal': 'sum', 'Rabais': 'sum'}).reset_index()
+        res_fin = force_sku_order(res_fin, ['LineTotal', 'Rabais'])
 
-    # Création du fichier Excel
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        res_sku.to_excel(writer, sheet_name='Ventes_SKU_Caisses', index=False)
-        res_jour.to_excel(writer, sheet_name='Ventes_SKU_Par_Jour', index=False)
-        res_banniere.to_excel(writer, sheet_name='Ventes_Banniere', index=False)
-        res_region.to_excel(writer, sheet_name='Ventes_Region', index=False)
-        res_rep.to_excel(writer, sheet_name='Ventes_Representant', index=False)
-        res_fin.to_excel(writer, sheet_name='Ventes_Financier', index=False)
-    
-    st.success("✅ Fichier prêt !")
-    st.download_button("📥 Télécharger Excel", output.getvalue(), "Ventes_Alchimiste.xlsx")
+        # Création du fichier Excel en mémoire
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            res_sku.to_excel(writer, sheet_name='Ventes_SKU_Caisses', index=False)
+            res_jour.to_excel(writer, sheet_name='Ventes_SKU_Par_Jour', index=False)
+            res_banniere.to_excel(writer, sheet_name='Ventes_Banniere', index=False)
+            res_region.to_excel(writer, sheet_name='Ventes_Region', index=False)
+            res_rep.to_excel(writer, sheet_name='Ventes_Representant', index=False)
+            res_fin.to_excel(writer, sheet_name='Ventes_Financier', index=False)
+        
+        st.success("✅ Fichier traité avec succès !")
+        st.download_button(
+            label="📥 Télécharger Excel",
+            data=output.getvalue(),
+            file_name="Traitement_Ventes_Hebdo.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        st.error(f"Erreur lors de la lecture du fichier : {e}")
+        st.write("Conseil : Assurez-vous que le fichier est bien un CSV valide.")
